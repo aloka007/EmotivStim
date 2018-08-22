@@ -100,6 +100,7 @@ void StimulusGenerator(void *unused)
 		//else{
 		//	randomNum = (rand() % (RANDOM_NUMS - 1)) + 1;
 		//}
+
 		randomNum = rand() % RANDOM_NUMS;  //random number
 
 		if (randomNum == 0 || loopCount == 0){
