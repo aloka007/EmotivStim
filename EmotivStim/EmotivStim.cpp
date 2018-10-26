@@ -13,6 +13,9 @@
 #include <iomanip>
 #include <time.h>
 #include <string.h>
+#include <string>
+#include <cstdlib>
+#include <algorithm>
 #include <ctime>
 #include <chrono>
 #include <process.h> // _beginthread(f,stacksize,*arglist)
@@ -22,26 +25,31 @@
 #include "SerialPort.h"
 
 
-#define MAX_DATA_LENGTH 2
+#define DATA_LENGTH 1
 
-#define TARGETS_PER_TRIAL 20
+#define TRIALS_PER_SERIES 120
 #define RANDOM_NUMS 4
-#define INTERFLASH_INTERVAL 400
+#define INTERFLASH_INTERVAL 300
 
-char* portName = "\\\\.\\COM3";
-char incomingData[MAX_DATA_LENGTH];
+//Classifier Parameters - Integration
+//#define WINDOW_OFFSET 155
+//#define WINDOW_SIZE 8
+
+//Classifier Parameters - Peak Comparison
+#define WINDOW_OFFSET 140
+#define WINDOW_SIZE 38
+
+char* portName = "\\\\.\\COM6";
+char incomingData[DATA_LENGTH];
 
 char t[] = "1";
 char nt[] = "2";
 int loopCount = 0;
-int lastTarget = 0;
 int trialCount = 0;
-bool trialDelay = false;
+int seriesCount = 0;
 SerialPort *arduino;
 
 int randomNum = 0;
-int t_count = 0;
-int nt_count = 0;
 
 bool running = true; /* flag used to stop the program execution */
 void StimulusGenerator(void *unused); /* Threaded function to generate stimulii and send them to Arduino MCU */
@@ -57,29 +65,15 @@ std::string GetTimeStr() { // Returns time in the format 2011.08.22-21.37.200 fo
 	return timeStr.str();
 }
 
-int main(int argc, char *argv[]) {
-	//int _tmain(int argc, _TCHAR* argv[]) {
-	std::cout << "EmotivStim v1.0 2018 - Emotiv EPOC EEG Data Logger for Light Flash Based P300 Experiments++" << std::endl;
-	//std::cout << "Developed by Hiran Ekanayake (hiran.ekanayake@gmail.com)" << std::endl;
-	std::cout << "This software has used external libraries such as edk.lib" << std::endl;
-	std::cout << "*****************************************************************" << std::endl;
-	std::cout << "Make sure to connect the EPOC headset and to connect the Arduino..." << std::endl;
-
-	
-	std::cout << "*****************************************************************" << std::endl;
-	std::cout << "Press any key to start running (press again to stop)..." << std::endl;
-	getchar();
-
-	_beginthread(EmotivDataCollector, 0, NULL);
-	_beginthread(StimulusGenerator, 0, NULL);
-	getchar(); // or std::cin.get();
-
-	running = false;
-	std::cout << "*****************************************************************" << std::endl;
-	std::cout << "Press any key to exit..." << std::endl;
-	getchar();
-	return 0;
+bool copyFile(const char *SRC, const char* DEST) //Copies file from program folder to a common folder
+{
+	std::ifstream src(SRC, std::ios::binary);
+	std::ofstream dest(DEST, std::ios::binary);
+	dest << src.rdbuf();
+	return src && dest;
 }
+
+
 
 void StimulusGenerator(void *unused)
 {
@@ -88,71 +82,69 @@ void StimulusGenerator(void *unused)
 	//Checking if arduino is connected or not
 	if (arduino->isConnected()){
 		std::cout << "Connection established at port " << portName << std::endl << std::endl;
+		//arduino->writeSerialPort("0", DATA_LENGTH);
+		int readResult = arduino->readSerialPort(incomingData, DATA_LENGTH);
+		readResult = arduino->readSerialPort(incomingData, DATA_LENGTH); //Clear incoming buffer
+		readResult = arduino->readSerialPort(incomingData, DATA_LENGTH);
+		readResult = arduino->readSerialPort(incomingData, DATA_LENGTH);
 	}
 	while (running) {
 
 		clock_t begin;
 		clock_t end;
 
-		//if (lastTarget + 2 < loopCount){ //generate a new random number if last 2 loops were not targets
-		//	randomNum = rand() % RANDOM_NUMS;  //random number
-		//}
-		//else{
-		//	randomNum = (rand() % (RANDOM_NUMS - 1)) + 1;
-		//}
+		char sendbuf[] = "  ";
 
-		randomNum = rand() % RANDOM_NUMS;  //random number
+		if (trialCount % TRIALS_PER_SERIES == 0){ // Inter-Trial code *******************************************
 
-		if (randomNum == 0 || loopCount == 0){
-			lastTarget = loopCount;
-
-			if (t_count % (TARGETS_PER_TRIAL) == 0){
-				if (!trialDelay){
-					trialCount++;
-					std::cout << std::endl << std::endl << "Beginning Trial: " << trialCount << std::endl << std::endl;
-					arduino->writeSerialPort("c\0", MAX_DATA_LENGTH);
-					Sleep(4000); //inter-trial delay
-					trialDelay = true;
-					randomNum = 1; //next flash cannot be a target
-				}
-				else{
-					t_count++;
-				}
+			if (seriesCount == 2){
+				running = false;
+				break;
 			}
-			else{
-				trialDelay = false;
-				t_count++;
-			}
-		}
-		else{
-			nt_count++;
-		}
-		begin = clock(); 
 
-		if (randomNum == 0){
-			//randomNum = 1; //next flash cannot be a target
-			arduino->writeSerialPort("1\0", MAX_DATA_LENGTH);
-			marker = 1;
-			printf("\t\t\t Sent: %s -> ", "1\0");
+			seriesCount++;
+			std::cout << std::endl << std::endl << "Beginning Trial Series: " << seriesCount << std::endl << std::endl;
+			arduino->writeSerialPort("c\0", DATA_LENGTH);
+			arduino->readBlockingSerialPort(incomingData, DATA_LENGTH);
+			Sleep(3000); //inter-trial delay
+			arduino->writeSerialPort("d\0", DATA_LENGTH);
+			arduino->readBlockingSerialPort(incomingData, DATA_LENGTH);
+			Sleep(500);
 		}
-		else{
-			arduino->writeSerialPort("2\0", MAX_DATA_LENGTH);
-			marker = 2;
-			printf("sent: %s -> ", nt);
-		}
-		int readResult;
-		readResult = arduino->readBlockingSerialPort(incomingData, MAX_DATA_LENGTH);
 
-		
+		randomNum =  (rand() % RANDOM_NUMS) + 1;  //random number
+		trialCount++;
+
+		strcpy(sendbuf, std::to_string(randomNum).c_str());
+		begin = clock();
+		arduino->writeSerialPort(sendbuf, DATA_LENGTH);  //Send random number to Arduino
+		marker = randomNum;
+		//THE WAIT!!!
+		int readResult = arduino->readBlockingSerialPort(incomingData, DATA_LENGTH); //Receive reply from Arduino
 		end = clock();
+
 		double elapsed_secs = double(end - begin) / (CLOCKS_PER_SEC / 1000);
-		
-		printf("received: %s\n\t\t\t\t\t\t delay: %fms targets: %d non-targets %d\n", incomingData, elapsed_secs, t_count, nt_count);
+		printf("\t\t\t\t\tSent-Received: %s-%c\t delay: %fms Trial Count: %d Targets (Est): %d\n", sendbuf, incomingData[0], elapsed_secs, trialCount, trialCount / RANDOM_NUMS);
+
+		if (sendbuf[0] != incomingData[0]){ //Compare the sent and received markers and stop if they are not equal
+			printf("SERIAL COM OUT OF SYNC!\nRESYNCING...\n\n");
+
+			readResult = arduino->readSerialPort(incomingData, DATA_LENGTH); //Clear incoming buffer
+			readResult = arduino->readSerialPort(incomingData, DATA_LENGTH);
+			readResult = arduino->readSerialPort(incomingData, DATA_LENGTH);
+
+			//running = false;
+		}
+
 		incomingData[0] = '\0';
 
 		loopCount++;
 		Sleep(INTERFLASH_INTERVAL);
 	}
+	arduino->writeSerialPort("a\0", DATA_LENGTH);
+	arduino->readBlockingSerialPort(incomingData, DATA_LENGTH);
+	arduino->writeSerialPort("c\0", DATA_LENGTH);
+	arduino->readBlockingSerialPort(incomingData, DATA_LENGTH);
 }
 
 void EmotivDataCollector(void *unused) {
@@ -184,12 +176,21 @@ void EmotivDataCollector(void *unused) {
 			running = false;
 		}
 		else {
-			std::stringstream filename, filename1;
+			std::stringstream filename, filename2, source, destination, srcPath, destPath, destName;
+			//Copying paths
+			source << "C:/Users/Tharinda/Documents/Visual Studio 2013/Projects/EmotivStim/Debug/";
+			
+			destination << "C:/Users/Tharinda/Documents/MATLAB/eeglab14_1_1b/eeg-common/";
+			destName << "templog.csv"; 
+			
 
 			filename << "eeglog-" << GetTimeStr() << ".csv"; // EEG log filename		
 			std::ofstream ofs(filename.str(), std::ios::trunc);
 			ofs << header << std::endl;
 
+			//filename2 << "preprocessed-log-" << GetTimeStr() << ".csv"; // EEG log filename		
+			filename2 << "preprocessed-log.csv"; // COMMON EEG log filename	
+			std::ofstream ofs2(filename2.str(), std::ios::trunc);
 
 			DataHandle hData = EE_DataCreate();
 			EE_DataSetBufferSizeInSec(secs);
@@ -232,12 +233,15 @@ void EmotivDataCollector(void *unused) {
 						double* data = new double[nSamplesTaken];
 						for (int sampleIdx = 0; sampleIdx<(int)nSamplesTaken; ++sampleIdx) {
 							for (int i = 0; i<sizeof(targetChannelList) / sizeof(EE_DataChannel_t); i++) {
-
+								int channel = targetChannelList[i];
 								EE_DataGet(hData, targetChannelList[i], data, nSamplesTaken);
 								ofs << data[sampleIdx] << ",";
-								//std::cout << data[sampleIdx] << ",";
+								if (channel == ED_P7 || channel == ED_O1 || channel == ED_O2 || channel == ED_AF4){
+									ofs2 << data[sampleIdx] << ",";
+								}
 							}
 							ofs << marker << std::endl;
+							ofs2 << marker << std::endl;
 							marker = 0;
 						}
 						delete[] data;
@@ -247,7 +251,22 @@ void EmotivDataCollector(void *unused) {
 			}
 
 			ofs.close();
+			ofs2.close();
 			EE_DataFree(hData);
+			/*char* sourceDir = "C:\\Users\\Tharinda\\Documents\\Visual Studio 2013\\Projects\\EmotivStim\\Debug\\";
+			strcat(sourceDir, "preprocessed-log.csv");
+			char* destDir = "C:\\Users\\Tharinda\\Documents\\MATLAB\\eeglab14_1_1b\\eeg-common\\";
+			strcat(destDir, "preprocessed-log.csv");
+			copyFile(sourceDir, destDir);*/
+
+			
+			/*srcPath << source.str() << filename2.str();
+			LPCWSTR src = (LPCWSTR)srcPath.str().c_str();
+			destPath << destination.str() << destName.str();
+			LPCWSTR dest = (LPCWSTR)destPath.str().c_str();
+			CopyFile(src, dest, TRUE);*/
+
+			
 		}
 		//	catch (const std::exception& e) {
 		//		std::cerr << e.what() << std::endl;
@@ -264,4 +283,259 @@ void EmotivDataCollector(void *unused) {
 		running = false;
 	}
 	std::cout << "Exiting from Emotiv connector..." << std::endl;
+	std::cout << std::endl << std::endl << "Data collection ended" << std::endl;
+	std::cout << "Press any key to continue" << std::endl;
+}
+
+void P300Classifier_Integrate() {
+	std::ifstream infile1("C:\\Users\\Tharinda\\Documents\\MATLAB\\eeglab14_1_1b\\eeg-common\\mat-to-cpp\\epochs-1-ar.avg");
+	std::ifstream infile2("C:\\Users\\Tharinda\\Documents\\MATLAB\\eeglab14_1_1b\\eeg-common\\mat-to-cpp\\epochs-2-ar.avg");
+	std::ifstream infile3("C:\\Users\\Tharinda\\Documents\\MATLAB\\eeglab14_1_1b\\eeg-common\\mat-to-cpp\\epochs-3-ar.avg");
+	std::ifstream infile4("C:\\Users\\Tharinda\\Documents\\MATLAB\\eeglab14_1_1b\\eeg-common\\mat-to-cpp\\epochs-4-ar.avg");
+
+	int count = 0;
+
+	std::string header;
+	double a, b, c, d, e, avg;
+
+	printf("\nScanning File epochs-1 \n");
+	double total1 = 0;
+	std::getline(infile1, header);
+	while (infile1 >> a >> b >> c >> d >> e)	{
+		if (count >= WINDOW_OFFSET && count <= WINDOW_OFFSET + WINDOW_SIZE){
+			avg = (c + d + e) / 3;
+			total1 += avg;
+			printf("time: %f avg: %f\n", a, avg);
+		}
+		count++;
+	}
+	count = 0;
+
+	printf("\nScanning File epochs-2 \n");
+	double total2 = 0;
+	std::getline(infile2, header);
+	while (infile2 >> a >> b >> c >> d >> e)	{
+		if (count >= WINDOW_OFFSET && count <= WINDOW_OFFSET + WINDOW_SIZE){
+			avg = (c + d + e) / 3;
+			total2 += avg;
+			printf("time: %f avg: %f\n", a, avg);
+		}
+		count++;
+	}
+	count = 0;
+
+	printf("\nScanning File epochs-3 \n");
+	double total3 = 0;
+	std::getline(infile3, header);
+	while (infile3 >> a >> b >> c >> d >> e)	{
+		if (count >= WINDOW_OFFSET && count <= WINDOW_OFFSET + WINDOW_SIZE){
+			avg = (c + d + e) / 3;
+			total3 += avg;
+			printf("time: %f avg: %f\n", a, avg);
+		}
+		count++;
+	}
+	count = 0;
+
+	printf("\nScanning File epochs-4 \n");
+	double total4 = 0;
+	std::getline(infile4, header);
+	while (infile4 >> a >> b >> c >> d >> e)	{
+		if (count >= WINDOW_OFFSET && count <= WINDOW_OFFSET + WINDOW_SIZE){
+			avg = (b + c + d) / 3;
+			//avg = b;
+			total4 += avg;
+			printf("time: %f avg: %f\n", a, avg);
+		}
+		count++;
+	}
+	count = 0;
+
+	infile1.close();
+	infile2.close();
+	infile3.close();
+	infile4.close();
+
+	printf("\n\nScan Ended\nTotal 1: %f\nTotal 2: %f\nTotal 3: %f\nTotal 4: %f\n ", total1, total2, total3, total4);
+	double totals[4] = { total1, total2, total3, total4 };
+	std::sort(totals, totals + 4);
+
+	int choice = 0;
+	double total = totals[0];
+	if (total == total1){
+		choice = 1;
+		printf("\n MARKER 1 IS THE CHOICE \n");
+	}
+	else if (total == total2){
+		choice = 2;
+		printf("\n MARKER 2 IS THE CHOICE \n");
+	}
+	else if (total == total3){
+		choice = 3;
+		printf("\n MARKER 3 IS THE CHOICE \n");
+	}
+	else if (total == total4){
+		choice = 4;
+		printf("\n MARKER 4 IS THE CHOICE \n");
+	}
+
+
+	getchar();
+}
+
+void P300Classifier_PeakDiff() {
+	std::ifstream infile1("C:\\Users\\Tharinda\\Documents\\MATLAB\\eeglab14_1_1b\\eeg-common\\mat-to-cpp\\epochs-1-ar.avg");
+	std::ifstream infile2("C:\\Users\\Tharinda\\Documents\\MATLAB\\eeglab14_1_1b\\eeg-common\\mat-to-cpp\\epochs-2-ar.avg");
+	std::ifstream infile3("C:\\Users\\Tharinda\\Documents\\MATLAB\\eeglab14_1_1b\\eeg-common\\mat-to-cpp\\epochs-3-ar.avg");
+	std::ifstream infile4("C:\\Users\\Tharinda\\Documents\\MATLAB\\eeglab14_1_1b\\eeg-common\\mat-to-cpp\\epochs-4-ar.avg");
+
+	int count = 0;
+
+	std::string header;
+	double a, b, c, d, e, avg;
+
+	printf("\nScanning File epochs-1 \n");
+	double diff1 = 0;
+	std::getline(infile1, header);
+	while (infile1 >> a >> b >> c >> d >> e)	{
+		if (count >= WINDOW_OFFSET && count <= WINDOW_OFFSET + WINDOW_SIZE){
+			avg = (c + d + e) / 3;
+			if (avg < diff1){
+				diff1 = avg;
+			}
+			printf("time: %f avg: %f\n", a, avg);
+		}
+		count++;
+	}
+	count = 0;
+
+	printf("\nScanning File epochs-2 \n");
+	double diff2 = 0;
+	std::getline(infile2, header);
+	while (infile2 >> a >> b >> c >> d >> e)	{
+		if (count >= WINDOW_OFFSET && count <= WINDOW_OFFSET + WINDOW_SIZE){
+			avg = (c + d + e) / 3;
+			if (avg < diff2){
+				diff2 = avg;
+			}
+			printf("time: %f avg: %f\n", a, avg);
+		}
+		count++;
+	}
+	count = 0;
+
+	printf("\nScanning File epochs-3 \n");
+	double diff3 = 0;
+	std::getline(infile3, header);
+	while (infile3 >> a >> b >> c >> d >> e)	{
+		if (count >= WINDOW_OFFSET && count <= WINDOW_OFFSET + WINDOW_SIZE){
+			avg = (c + d + e) / 3;
+			if (avg < diff3){
+				diff3 = avg;
+			}
+			printf("time: %f avg: %f\n", a, avg);
+		}
+		count++;
+	}
+	count = 0;
+
+	printf("\nScanning File epochs-4 \n");
+	double diff4 = 0;
+	std::getline(infile4, header);
+	while (infile4 >> a >> b >> c >> d >> e)	{
+		if (count >= WINDOW_OFFSET && count <= WINDOW_OFFSET + WINDOW_SIZE){
+			avg = (b + c + d) / 3;
+			//avg = b;
+			if (avg < diff4){
+				diff4 = avg;
+			}
+			printf("time: %f avg: %f\n", a, avg);
+		}
+		count++;
+	}
+	count = 0;
+
+	infile1.close();
+	infile2.close();
+	infile3.close();
+	infile4.close();
+
+	printf("\n\nScan Ended\ndiff 1: %f\ndiff 2: %f\ndiff 3: %f\ndiff 4: %f\n ", diff1, diff2, diff3, diff4);
+	double diffs[4] = { diff1, diff2, diff3, diff4 };
+	std::sort(diffs, diffs + 4);
+
+	int choice = 0;
+	double diff = diffs[0];
+	if (diff == diff1){
+		choice = 1;
+		printf("\n MARKER 1 IS THE CHOICE \n");
+	}
+	else if (diff == diff2){
+		choice = 2;
+		printf("\n MARKER 2 IS THE CHOICE \n");
+	}
+	else if (diff == diff3){
+		choice = 3;
+		printf("\n MARKER 3 IS THE CHOICE \n");
+	}
+	else if (diff == diff4){
+		choice = 4;
+		printf("\n MARKER 4 IS THE CHOICE \n");
+	}
+
+
+	getchar();
+}
+
+
+
+int main(int argc, char *argv[]) {
+	//int _tmain(int argc, _TCHAR* argv[]) {
+	std::cout << "EmotivStim v1.0 2018 - Emotiv EPOC EEG Data Logger for Light Flash Based P300 Experiments++" << std::endl;
+	std::cout << "This software has used external libraries such as edk.lib" << std::endl;
+	std::cout << "*****************************************************************" << std::endl;
+	std::cout << "Make sure to connect the EPOC headset and to connect the Arduino..." << std::endl;
+	std::cout << "*****************************************************************" << std::endl;
+	std::cout << "Press any key to start running (press again to stop)..." << std::endl;
+	getchar();
+
+	HANDLE DCThread = (HANDLE)_beginthread(EmotivDataCollector, 0, NULL);
+	HANDLE SGThread = (HANDLE)_beginthread(StimulusGenerator, 0, NULL);
+	
+	WaitForSingleObject(DCThread, INFINITE);
+	WaitForSingleObject(SGThread, INFINITE);
+	//getchar(); // or std::cin.get();
+
+	running = false;
+	
+	Sleep(100);
+	std::cout << "Sending data to MATLAB..." << std::endl;
+	//File copying code
+	LPCWSTR dest = L"C:/Users/Tharinda/Documents/MATLAB/eeglab14_1_1b/eeg-common/cpp-to-mat/templog.csv";
+	LPCWSTR src = L"C:/Users/Tharinda/Documents/Visual Studio 2013/Projects/EmotivStim/Debug/preprocessed-log.csv";
+	CopyFile(src, dest, TRUE);
+	std::cout << "Waiting for response from MATLAB" << std::endl;
+	//getchar();
+
+	LPCWSTR lookupFile = L"C:\\Users\\Tharinda\\Documents\\MATLAB\\eeglab14_1_1b\\eeg-common\\mat-to-cpp\\epochs-4-ar.avg";
+	while (true)
+	{
+		GetFileAttributes(lookupFile); // from winbase.h
+		if (INVALID_FILE_ATTRIBUTES == GetFileAttributes(lookupFile) && GetLastError() == ERROR_FILE_NOT_FOUND)
+		{
+			Sleep(100);
+		}
+		else{
+			std::cout << "Got response from MATLAB" << std::endl;
+			Sleep(1000);
+			break;
+		}
+	}
+
+	P300Classifier_PeakDiff();
+
+	std::cout << "*****************************************************************" << std::endl;
+	std::cout << "Press any key to exit..." << std::endl;
+	getchar();
+	return 0;
 }

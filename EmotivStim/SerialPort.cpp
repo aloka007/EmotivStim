@@ -97,6 +97,7 @@ int SerialPort::readBlockingSerialPort(char *buffer, unsigned int buf_size)
 		}
 
 		if (available && ReadFile(this->handler, buffer, toRead, &bytesRead, NULL)){
+			this->readSerialPort(buffer, buf_size); // added part
 			return bytesRead;
 		}
 	}
