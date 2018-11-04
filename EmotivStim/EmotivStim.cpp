@@ -10,34 +10,43 @@
 #include <sstream>
 #include <map>
 #include <iostream>
+#include <conio.h>
 #include <iomanip>
 #include <time.h>
 #include <string.h>
 #include <string>
 #include <cstdlib>
 #include <algorithm>
+#include <math.h>
 #include <ctime>
-#include <chrono>
 #include <process.h> // _beginthread(f,stacksize,*arglist)
 #include "EmoStateDLL.h"
 #include "edk.h"
 #include "edkErrorCode.h"
 #include "SerialPort.h"
-
+#include "enceph.h"
 
 #define DATA_LENGTH 1
 
-#define TRIALS_PER_SERIES 120
-#define RANDOM_NUMS 4
-#define INTERFLASH_INTERVAL 300
+//#define TRIALS_PER_SERIES 120
+//#define RANDOM_NUMS 4
+//#define INTERFLASH_INTERVAL 300
 
 //Classifier Parameters - Integration
 //#define WINDOW_OFFSET 155
 //#define WINDOW_SIZE 8
 
 //Classifier Parameters - Peak Comparison
-#define WINDOW_OFFSET 140
-#define WINDOW_SIZE 38
+//#define WINDOW_OFFSET 140
+//#define WINDOW_SIZE 38
+
+int TRIALS_PER_SERIES = 200;
+int RANDOM_NUMS = 4;
+int INTERFLASH_INTERVAL = 300;
+
+//Classifier Parameters - Peak Comparison
+int WINDOW_OFFSET = 140;
+int WINDOW_SIZE = 38;
 
 char* portName = "\\\\.\\COM6";
 char incomingData[DATA_LENGTH];
@@ -73,10 +82,11 @@ bool copyFile(const char *SRC, const char* DEST) //Copies file from program fold
 	return src && dest;
 }
 
-
-
 void StimulusGenerator(void *unused)
 {
+	int seriesCount = 0;
+	int loopCount = 0;
+	int trialCount = 0;
 	arduino = new SerialPort(portName);
 
 	//Checking if arduino is connected or not
@@ -97,7 +107,7 @@ void StimulusGenerator(void *unused)
 
 		if (trialCount % TRIALS_PER_SERIES == 0){ // Inter-Trial code *******************************************
 
-			if (seriesCount == 2){
+			if (seriesCount == 1){
 				running = false;
 				break;
 			}
@@ -106,7 +116,7 @@ void StimulusGenerator(void *unused)
 			std::cout << std::endl << std::endl << "Beginning Trial Series: " << seriesCount << std::endl << std::endl;
 			arduino->writeSerialPort("c\0", DATA_LENGTH);
 			arduino->readBlockingSerialPort(incomingData, DATA_LENGTH);
-			Sleep(3000); //inter-trial delay
+			Sleep(3000); //inter-series delay
 			arduino->writeSerialPort("d\0", DATA_LENGTH);
 			arduino->readBlockingSerialPort(incomingData, DATA_LENGTH);
 			Sleep(500);
@@ -124,7 +134,7 @@ void StimulusGenerator(void *unused)
 		end = clock();
 
 		double elapsed_secs = double(end - begin) / (CLOCKS_PER_SEC / 1000);
-		printf("\t\t\t\t\tSent-Received: %s-%c\t delay: %fms Trial Count: %d Targets (Est): %d\n", sendbuf, incomingData[0], elapsed_secs, trialCount, trialCount / RANDOM_NUMS);
+		printf("\t\t\t\t\t\tSent-Received: %s-%c\t delay: %fms Trial Count: %d Targets (Est): %d\n", sendbuf, incomingData[0], elapsed_secs, trialCount, trialCount / RANDOM_NUMS);
 
 		if (sendbuf[0] != incomingData[0]){ //Compare the sent and received markers and stop if they are not equal
 			printf("SERIAL COM OUT OF SYNC!\nRESYNCING...\n\n");
@@ -145,6 +155,7 @@ void StimulusGenerator(void *unused)
 	arduino->readBlockingSerialPort(incomingData, DATA_LENGTH);
 	arduino->writeSerialPort("c\0", DATA_LENGTH);
 	arduino->readBlockingSerialPort(incomingData, DATA_LENGTH);
+	delete arduino;
 }
 
 void EmotivDataCollector(void *unused) {
@@ -197,6 +208,11 @@ void EmotivDataCollector(void *unused) {
 
 			std::cout << "EEG buffer size in secs:" << secs << std::endl;
 
+			//std::cout.setstate(std::ios_base::failbit);
+			//std::streambuf* cout_sbuf = std::cout.rdbuf(); // save original sbuf
+			//std::ofstream   fout("/dev/null");
+			//std::cout.rdbuf(fout.rdbuf()); // redirect 'cout' to a 'fout'
+
 			while (running) {
 				state = EE_EngineGetNextEvent(eEvent);
 
@@ -221,6 +237,7 @@ void EmotivDataCollector(void *unused) {
 					//	//writeHeader = false;
 					//}
 				}
+
 
 				if (collectEEG) {
 					EE_DataUpdateHandle(0, hData);
@@ -249,6 +266,9 @@ void EmotivDataCollector(void *unused) {
 				}
 				Sleep(1);
 			}
+
+			//std::cout.rdbuf(cout_sbuf); // restore the original stream buffer
+			//std::cout.clear();
 
 			ofs.close();
 			ofs2.close();
@@ -303,7 +323,7 @@ void P300Classifier_Integrate() {
 	std::getline(infile1, header);
 	while (infile1 >> a >> b >> c >> d >> e)	{
 		if (count >= WINDOW_OFFSET && count <= WINDOW_OFFSET + WINDOW_SIZE){
-			avg = (c + d + e) / 3;
+			avg = (b + c + d) / 3;
 			total1 += avg;
 			printf("time: %f avg: %f\n", a, avg);
 		}
@@ -316,7 +336,7 @@ void P300Classifier_Integrate() {
 	std::getline(infile2, header);
 	while (infile2 >> a >> b >> c >> d >> e)	{
 		if (count >= WINDOW_OFFSET && count <= WINDOW_OFFSET + WINDOW_SIZE){
-			avg = (c + d + e) / 3;
+			avg = (b + c + d) / 3;
 			total2 += avg;
 			printf("time: %f avg: %f\n", a, avg);
 		}
@@ -329,7 +349,7 @@ void P300Classifier_Integrate() {
 	std::getline(infile3, header);
 	while (infile3 >> a >> b >> c >> d >> e)	{
 		if (count >= WINDOW_OFFSET && count <= WINDOW_OFFSET + WINDOW_SIZE){
-			avg = (c + d + e) / 3;
+			avg = (b + c + d) / 3;
 			total3 += avg;
 			printf("time: %f avg: %f\n", a, avg);
 		}
@@ -343,7 +363,6 @@ void P300Classifier_Integrate() {
 	while (infile4 >> a >> b >> c >> d >> e)	{
 		if (count >= WINDOW_OFFSET && count <= WINDOW_OFFSET + WINDOW_SIZE){
 			avg = (b + c + d) / 3;
-			//avg = b;
 			total4 += avg;
 			printf("time: %f avg: %f\n", a, avg);
 		}
@@ -356,31 +375,31 @@ void P300Classifier_Integrate() {
 	infile3.close();
 	infile4.close();
 
-	printf("\n\nScan Ended\nTotal 1: %f\nTotal 2: %f\nTotal 3: %f\nTotal 4: %f\n ", total1, total2, total3, total4);
+	printf("\n\nScan Ended\nTotal 1: %f\nTotal 2: %f\nTotal 3: %f\nTotal 4: %f\n", total1, total2, total3, total4);
 	double totals[4] = { total1, total2, total3, total4 };
 	std::sort(totals, totals + 4);
 
 	int choice = 0;
 	double total = totals[0];
+	std::cout << "Decision of Classifier: -------- ";
 	if (total == total1){
 		choice = 1;
-		printf("\n MARKER 1 IS THE CHOICE \n");
+		printf("MARKER 1\n");
 	}
 	else if (total == total2){
 		choice = 2;
-		printf("\n MARKER 2 IS THE CHOICE \n");
+		printf("MARKER 2\n");
 	}
 	else if (total == total3){
 		choice = 3;
-		printf("\n MARKER 3 IS THE CHOICE \n");
+		printf("MARKER 3\n");
 	}
 	else if (total == total4){
 		choice = 4;
-		printf("\n MARKER 4 IS THE CHOICE \n");
+		printf("MARKER 4\n");
 	}
 
-
-	getchar();
+	std::cout << "Confidence: " << ((total - ((totals[1] < 0) ? totals[1] : 0)) / total) * 100 << "% " << std::endl;
 }
 
 void P300Classifier_PeakDiff() {
@@ -487,52 +506,558 @@ void P300Classifier_PeakDiff() {
 	getchar();
 }
 
+void P300Classifier_WeightGauss(){
+	std::ifstream infile1("C:\\Users\\Tharinda\\Documents\\MATLAB\\eeglab14_1_1b\\eeg-common\\mat-to-cpp\\epochs-1-ar.avg");
+	std::ifstream infile2("C:\\Users\\Tharinda\\Documents\\MATLAB\\eeglab14_1_1b\\eeg-common\\mat-to-cpp\\epochs-2-ar.avg");
+	std::ifstream infile3("C:\\Users\\Tharinda\\Documents\\MATLAB\\eeglab14_1_1b\\eeg-common\\mat-to-cpp\\epochs-3-ar.avg");
+	std::ifstream infile4("C:\\Users\\Tharinda\\Documents\\MATLAB\\eeglab14_1_1b\\eeg-common\\mat-to-cpp\\epochs-4-ar.avg");
+
+	int count = 0;
+
+	std::string header;
+	double a, b, c, d, e;
+
+	double buffer1[128][8], buffer2[128][8], buffer3[128][8], buffer4[128][8];
+
+
+
+	printf("\nScanning File epochs-1 \n");
+	std::getline(infile1, header);
+	while (infile1 >> a >> b >> c >> d >> e)	{
+		if (count >= 128 && count < 256){
+			buffer1[count - 128][0] = a; 
+			buffer1[count - 128][1] = b;
+			buffer1[count - 128][2] = c;
+			buffer1[count - 128][3] = d;
+			buffer1[count - 128][4] = e;
+			
+			printf("time: %f AF4: %f P7: %f O1: %f O2: %f \n", a, b, c, d, e);
+		}
+		count++;
+	}
+	count = 0;
+
+	printf("\nScanning File epochs-1 \n");
+	std::getline(infile2, header);
+	while (infile2 >> a >> b >> c >> d >> e)	{
+		if (count >= 128 && count < 256){
+			buffer2[count - 128][0] = a;
+			buffer2[count - 128][1] = b;
+			buffer2[count - 128][2] = c;
+			buffer2[count - 128][3] = d;
+			buffer2[count - 128][4] = e;
+
+			printf("time: %f AF4: %f P7: %f O1: %f O2: %f \n", a, b, c, d, e);
+		}
+		count++;
+	}
+	count = 0;
+
+	printf("\nScanning File epochs-1 \n");
+	std::getline(infile3, header);
+	while (infile3 >> a >> b >> c >> d >> e)	{
+		if (count >= 128 && count < 256){
+			buffer3[count - 128][0] = a;
+			buffer3[count - 128][1] = b;
+			buffer3[count - 128][2] = c;
+			buffer3[count - 128][3] = d;
+			buffer3[count - 128][4] = e;
+
+			printf("time: %f AF4: %f P7: %f O1: %f O2: %f \n", a, b, c, d, e);
+		}
+		count++;
+	}
+	count = 0;
+
+	printf("\nScanning File epochs-1 \n");
+	std::getline(infile4, header);
+	while (infile4 >> a >> b >> c >> d >> e)	{
+		if (count >= 128 && count < 256){
+			buffer4[count - 128][0] = a;
+			buffer4[count - 128][1] = b;
+			buffer4[count - 128][2] = c;
+			buffer4[count - 128][3] = d;
+			buffer4[count - 128][4] = e;
+
+			printf("time: %f AF4: %f P7: %f O1: %f O2: %f \n", a, b, c, d, e);
+		}
+		count++;
+	}
+	count = 0;
+
+	infile1.close();
+	infile2.close();
+	infile3.close();
+	infile4.close();
+
+	static double peaks[10] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+
+	double total1 = 0, total2 = 0, total3 = 0, total4 = 0;
+
+	double peakPos = 250.0;
+
+	for (int i = 0; i < 128; i++){
+		double v = gaussian(buffer1[i][0], peakPos) * weighting(buffer1[i][1], buffer1[i][2], buffer1[i][3], buffer1[i][4]);
+		buffer1[i][5] = v;
+		total1 += (-v);
+	}
+	for (int i = 0; i < 128; i++){
+		double v = gaussian(buffer2[i][0], peakPos) * weighting(buffer2[i][1], buffer2[i][2], buffer2[i][3], buffer2[i][4]);
+		buffer2[i][5] = v;
+		total2 += (-v);
+	}
+	for (int i = 0; i < 128; i++){
+		double v = gaussian(buffer3[i][0], peakPos) * weighting(buffer3[i][1], buffer3[i][2], buffer3[i][3], buffer3[i][4]);
+		buffer3[i][5] = v;
+		total3 += (-v);
+	}
+	for (int i = 0; i < 128; i++){
+		double v = gaussian(buffer4[i][0], peakPos) * weighting(buffer4[i][1], buffer4[i][2], buffer4[i][3], buffer4[i][4]);
+		buffer4[i][5] = v;
+		total4 += (-v);
+	}
+
+
+	printf("\n\nScan Ended\nTotal 1: %f\nTotal 2: %f\nTotal 3: %f\nTotal 4: %f\n", total1, total2, total3, total4);
+	double totals[4] = { total1, total2, total3, total4 };
+	std::sort(totals, totals + 4);
+
+	int choice = 0;
+	double total = totals[0];
+	std::cout << "Decision of Classifier: -------- ";
+	if (total == total1){
+		choice = 1;
+		printf("MARKER 1\n");
+	}
+	else if (total == total2){
+		choice = 2;
+		printf("MARKER 2\n");
+	}
+	else if (total == total3){
+		choice = 3;
+		printf("MARKER 3\n");
+	}
+	else if (total == total4){
+		choice = 4;
+		printf("MARKER 4\n");
+	}
+
+	std::cout << "Confidence: " << ((total - ((totals[1] < 0) ? totals[1] : 0)) / total) * 100 << "% " << std::endl;
+}
+
+template<size_t R, size_t C>
+int P300Classifier_AdaptWeightGauss(int experiment, char mode, int target, double (&history)[R][C]){
+	std::cout << "Model based - Adaptive Hybrid Classifier With Gaussian Filtering and Weighted Channel Ensembling" << std::endl;
+
+	int TARGETS = 4; //hardcoded
+
+	static double SEARCH_START = 110.0, SEARCH_END = 490.0, SEARCH_RADIUS = 10.0, SEARCH_CENTER = 250.0; // start from around 300
+	SEARCH_START = SEARCH_CENTER - SEARCH_RADIUS;
+	SEARCH_END = SEARCH_CENTER + SEARCH_RADIUS;
+	std::cout << "\t > Search Start > " << SEARCH_START << "\t < Search End > " << SEARCH_END << std::endl;
+
+	//Getting file streams
+	std::ifstream infile1("C:\\Users\\Tharinda\\Documents\\MATLAB\\eeglab14_1_1b\\eeg-common\\mat-to-cpp\\epochs-1-ar.avg");
+	std::ifstream infile2("C:\\Users\\Tharinda\\Documents\\MATLAB\\eeglab14_1_1b\\eeg-common\\mat-to-cpp\\epochs-2-ar.avg");
+	std::ifstream infile3("C:\\Users\\Tharinda\\Documents\\MATLAB\\eeglab14_1_1b\\eeg-common\\mat-to-cpp\\epochs-3-ar.avg");
+	std::ifstream infile4("C:\\Users\\Tharinda\\Documents\\MATLAB\\eeglab14_1_1b\\eeg-common\\mat-to-cpp\\epochs-4-ar.avg");
+
+	int count = 0;
+
+	std::string header;
+	double a, b, c, d, e;
+
+	double buffer1[128][8], buffer2[128][8], buffer3[128][8], buffer4[128][8];
+
+	//Scanning files and loading into buffers
+	printf("\nScanning File epochs-1 \n");
+	std::getline(infile1, header);
+	while (infile1 >> a >> b >> c >> d >> e)	{
+		if (count >= 128 && count < 256){
+			buffer1[count - 128][0] = a;
+			buffer1[count - 128][1] = b;
+			buffer1[count - 128][2] = c;
+			buffer1[count - 128][3] = d;
+			buffer1[count - 128][4] = e;
+
+			//printf("time: %f AF4: %f P7: %f O1: %f O2: %f \n", a, b, c, d, e);
+		}
+		count++;
+	}
+	count = 0;
+
+	printf("\nScanning File epochs-2 \n");
+	std::getline(infile2, header);
+	while (infile2 >> a >> b >> c >> d >> e)	{
+		if (count >= 128 && count < 256){
+			buffer2[count - 128][0] = a;
+			buffer2[count - 128][1] = b;
+			buffer2[count - 128][2] = c;
+			buffer2[count - 128][3] = d;
+			buffer2[count - 128][4] = e;
+
+			//printf("time: %f AF4: %f P7: %f O1: %f O2: %f \n", a, b, c, d, e);
+		}
+		count++;
+	}
+	count = 0;
+
+	printf("\nScanning File epochs-3 \n");
+	std::getline(infile3, header);
+	while (infile3 >> a >> b >> c >> d >> e)	{
+		if (count >= 128 && count < 256){
+			buffer3[count - 128][0] = a;
+			buffer3[count - 128][1] = b;
+			buffer3[count - 128][2] = c;
+			buffer3[count - 128][3] = d;
+			buffer3[count - 128][4] = e;
+
+			//printf("time: %f AF4: %f P7: %f O1: %f O2: %f \n", a, b, c, d, e);
+		}
+		count++;
+	}
+	count = 0;
+
+	printf("\nScanning File epochs-4 \n");
+	std::getline(infile4, header);
+	while (infile4 >> a >> b >> c >> d >> e)	{
+		if (count >= 128 && count < 256){
+			buffer4[count - 128][0] = a;
+			buffer4[count - 128][1] = b;
+			buffer4[count - 128][2] = c;
+			buffer4[count - 128][3] = d;
+			buffer4[count - 128][4] = e;
+
+			//printf("time: %f AF4: %f P7: %f O1: %f O2: %f \n", a, b, c, d, e);
+		}
+		count++;
+	}
+	count = 0;
+
+	//Closing file streams
+	infile1.close();
+	infile2.close();
+	infile3.close();
+	infile4.close();
+
+	double total1 = 0, total2 = 0, total3 = 0, total4 = 0;
+
+	static double peaks[10] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+
+	double peakPos1 = 250.0, peakPos2 = 250.0, peakPos3 = 250.0, peakPos4 = 250.0 ;
+
+	double peak1 = 0, peak2 = 0, peak3 = 0, peak4 = 0;
+
+	//Peak picking: This gives the negative peak value and its position in P7 channel
+	//only the peaks between search start and search end are considered
+	for (int i = 0; i < 128; i++){
+		double v = buffer1[i][2];
+		if (buffer1[i][0] >= SEARCH_START && buffer1[i][0] <= SEARCH_END && v < peak1){
+			peak1 = v;
+			peakPos1 = buffer1[i][0];
+		}
+		
+	}
+
+	for (int i = 0; i < 128; i++){
+		double v = buffer2[i][2];
+		if (buffer1[i][0] >= SEARCH_START && buffer1[i][0] <= SEARCH_END && v < peak2){
+			peak2 = v;
+			peakPos2 = buffer2[i][0];
+		}
+	}
+
+	for (int i = 0; i < 128; i++){
+		double v = buffer3[i][2];
+		if (buffer1[i][0] >= SEARCH_START && buffer1[i][0] <= SEARCH_END && v < peak3){
+			peak3 = v;
+			peakPos3 = buffer3[i][0];
+		}
+	}
+
+	for (int i = 0; i < 128; i++){
+		double v = buffer4[i][2];
+		if (buffer1[i][0] >= SEARCH_START && buffer1[i][0] <= SEARCH_END && v < peak4){
+			peak4 = v;
+			peakPos4 = buffer4[i][0];
+		}
+	}
+
+	if (mode == 'A' && experiment < 10){
+		switch (target){
+		case 1 : SEARCH_CENTER = peakPos1; break;
+		case 2 : SEARCH_CENTER = peakPos2; break;
+		case 3 : SEARCH_CENTER = peakPos3; break;
+		case 4 : SEARCH_CENTER = peakPos4; break;
+		default: break;
+		}
+		SEARCH_RADIUS -= 20;
+		
+	}
+
+	// Wave analysis
+	for (int i = 0; i < 128; i++){
+		double v = gaussian(buffer1[i][0], peakPos1) * weighting(buffer1[i][1], buffer1[i][2], buffer1[i][3], buffer1[i][4]);
+		buffer1[i][5] = v;
+		total1 += (-v);
+	}
+	for (int i = 0; i < 128; i++){
+		double v = gaussian(buffer2[i][0], peakPos2) * weighting(buffer2[i][1], buffer2[i][2], buffer2[i][3], buffer2[i][4]);
+		buffer2[i][5] = v;
+		total2 += (-v);
+	}
+	for (int i = 0; i < 128; i++){
+		double v = gaussian(buffer3[i][0], peakPos3) * weighting(buffer3[i][1], buffer3[i][2], buffer3[i][3], buffer3[i][4]);
+		buffer3[i][5] = v;
+		total3 += (-v);
+	}
+	for (int i = 0; i < 128; i++){
+		double v = gaussian(buffer4[i][0], peakPos4) * weighting(buffer4[i][1], buffer4[i][2], buffer4[i][3], buffer4[i][4]);
+		buffer4[i][5] = v;
+		total4 += (-v);
+	}
+
+
+	printf("\n\nScan Ended\nTotal 1: %f\nTotal 2: %f\nTotal 3: %f\nTotal 4: %f\n", total1, total2, total3, total4);
+	double totals[4] = { total1, total2, total3, total4 };
+	std::sort(totals, totals + 4);
+
+	int choice = 0;
+	double total = totals[0];
+	std::cout << "Decision of Classifier: -------- ";
+	if (total == total1){
+		choice = 1;
+		history[experiment][4] = peakPos1;
+		printf("MARKER 1\n");
+	}
+	else if (total == total2){
+		choice = 2;
+		history[experiment][4] = peakPos2;
+		printf("MARKER 2\n");
+	}
+	else if (total == total3){
+		choice = 3;
+		history[experiment][4] = peakPos3;
+		printf("MARKER 3\n");
+	}
+	else if (total == total4){
+		choice = 4;
+		history[experiment][4] = peakPos4;
+		printf("MARKER 4\n");
+	}
+
+	double confidence = ((total - ((totals[1] < 0) ? totals[1] : 0)) / total) * 100;
+
+	history[experiment][3] = confidence;
+
+	std::cout << "Confidence: " << confidence  << "% " << std::endl;
+	return choice;
+}
 
 
 int main(int argc, char *argv[]) {
 	//int _tmain(int argc, _TCHAR* argv[]) {
-	std::cout << "EmotivStim v1.0 2018 - Emotiv EPOC EEG Data Logger for Light Flash Based P300 Experiments++" << std::endl;
+	const int total_experiments = 100;
+	int experiment = 1;
+	bool testing = true;
+	char mode = 'B';
+	int target = 0;
+
+	int correct = 0;
+	int wrong = 0;
+
+	double history[total_experiments][10]; //Experiment history = {correct/wrong - 1/0 , target , result , confidence , peakPos}
+	
+	std::cout << "EmotivStim v1.0 2018 - Emotiv EPOC EEG Data Logger for Light Flash Based P300 Experiments" << std::endl;
 	std::cout << "This software has used external libraries such as edk.lib" << std::endl;
 	std::cout << "*****************************************************************" << std::endl;
-	std::cout << "Make sure to connect the EPOC headset and to connect the Arduino..." << std::endl;
-	std::cout << "*****************************************************************" << std::endl;
-	std::cout << "Press any key to start running (press again to stop)..." << std::endl;
-	getchar();
+	std::cout << "Make sure to connect the EPOC headset and to connect the Arduino" << std::endl << std::endl;
 
-	HANDLE DCThread = (HANDLE)_beginthread(EmotivDataCollector, 0, NULL);
-	HANDLE SGThread = (HANDLE)_beginthread(StimulusGenerator, 0, NULL);
-	
-	WaitForSingleObject(DCThread, INFINITE);
-	WaitForSingleObject(SGThread, INFINITE);
-	//getchar(); // or std::cin.get();
+	while (testing && experiment < total_experiments){
+		std::cout << std::endl << std::endl;
 
-	running = false;
-	
-	Sleep(100);
-	std::cout << "Sending data to MATLAB..." << std::endl;
-	//File copying code
-	LPCWSTR dest = L"C:/Users/Tharinda/Documents/MATLAB/eeglab14_1_1b/eeg-common/cpp-to-mat/templog.csv";
-	LPCWSTR src = L"C:/Users/Tharinda/Documents/Visual Studio 2013/Projects/EmotivStim/Debug/preprocessed-log.csv";
-	CopyFile(src, dest, TRUE);
-	std::cout << "Waiting for response from MATLAB" << std::endl;
-	//getchar();
-
-	LPCWSTR lookupFile = L"C:\\Users\\Tharinda\\Documents\\MATLAB\\eeglab14_1_1b\\eeg-common\\mat-to-cpp\\epochs-4-ar.avg";
-	while (true)
-	{
-		GetFileAttributes(lookupFile); // from winbase.h
-		if (INVALID_FILE_ATTRIBUTES == GetFileAttributes(lookupFile) && GetLastError() == ERROR_FILE_NOT_FOUND)
-		{
-			Sleep(100);
+		std::cout << "~~----------------------HISTORY----------------------~~" << std::endl;
+		std::cout << "{#\tC/W \ttarget \tresult \tconfidence \tpeakPos}" << std::endl;
+		for (int i = 1; i < experiment; i++){
+			std::cout << "#" << i << "\t" << history[i][0] << "\t" << history[i][1] << "\t" << history[i][2]
+				<< "\t" << history[i][3] << "%\t" << history[i][4] << "\t" << std::endl;
 		}
-		else{
-			std::cout << "Got response from MATLAB" << std::endl;
-			Sleep(1000);
+
+		std::cout << "******************************************************************" << std::endl;
+		std::cout << "                          EXPERIMENT #" << experiment << std::endl;
+		std::cout << "******************************************************************" << std::endl << std::endl;
+
+		std::cout << "Current experiment parameters are as follows..." << std::endl << std::endl;
+
+		std::cout << "\tRunning Mode:--------------------- " << mode << std::endl;
+		std::cout << "\tTrials Per Series:---------------- " << TRIALS_PER_SERIES << std::endl;
+		std::cout << "\tRandom Numbers:------------------- " << RANDOM_NUMS << std::endl;
+		std::cout << "\tISI:------------------------------ " << INTERFLASH_INTERVAL << "ms" << std::endl << std::endl;
+		/*std::cout << "\tWindow Offset (From -1000ms):----- " << WINDOW_OFFSET << " frames" << std::endl;
+		std::cout << "\tWindow Size:---------------------- " << WINDOW_SIZE << " frames" << std::endl << std::endl;*/
+
+		std::cout << "Press SPACE to continue, Press E to change values" << std::endl << std::endl;
+		char key;
+		key = _getch();
+		if (key == 'E' || key == 'e'){
+			//getchar();
+
+			std::string input;
+			std::cout << "\tRunning Mode:--------------------- ";
+			std::getline(std::cin, input);
+			if (!input.empty()) {
+				std::istringstream stream(input);
+				stream >> mode;
+			}
+			std::cout << std::endl;
+
+			std::cout << "\tTrials Per Series:---------------- ";
+			std::getline(std::cin, input);
+			if (!input.empty()) {
+				std::istringstream stream(input);
+				stream >> TRIALS_PER_SERIES;
+			}
+			std::cout << std::endl;
+
+			std::cout << "\tISI:------------------------------ ";
+			std::getline(std::cin, input);
+			if (!input.empty()) {
+				std::istringstream stream(input);
+				stream >> INTERFLASH_INTERVAL;
+			}
+			std::cout << std::endl;
+
+			/*std::cout << "\tRandom Numbers:------------------- ";
+			std::getline(std::cin, input);
+			if (!input.empty()) {
+				std::istringstream stream(input);
+				stream >> RANDOM_NUMS;
+			}
+			std::cout << std::endl;
+
+			std::cout << "\tWindow Offset (From -1000ms):----- ";
+			std::getline(std::cin, input);
+			if (!input.empty()) {
+				std::istringstream stream(input);
+				stream >> WINDOW_OFFSET;
+			}
+			std::cout << std::endl;
+
+			std::cout << "\tWindow Size:---------------------- ";
+			std::getline(std::cin, input);
+			if (!input.empty()) {
+				std::istringstream stream(input);
+				stream >> WINDOW_SIZE;
+			}
+			std::cout << std::endl << std::endl;*/
+
+			std::cout << "Updated experiment parameters are as follows..." << std::endl << std::endl;
+
+			std::cout << "\tRunning Mode:--------------------- " << mode << std::endl;
+			std::cout << "\tTrials Per Series:---------------- " << TRIALS_PER_SERIES << std::endl;
+			std::cout << "\tRandom Numbers:------------------- " << RANDOM_NUMS << std::endl;
+			std::cout << "\tISI:------------------------------ " << INTERFLASH_INTERVAL << "ms" << std::endl << std::endl << std::endl;
+			/*std::cout << "\tWindow Offset (From -1000ms):----- " << WINDOW_OFFSET << " frames" << std::endl;
+			std::cout << "\tWindow Size:---------------------- " << WINDOW_SIZE << " frames" << std::endl << std::endl;*/
+		}
+
+
+		// Get expected result to compare
+		if (mode == 'A' || mode == 'B'){
+			std::string input;
+			std::cout << "\t Target Command:--------------- ";
+			std::getline(std::cin, input);
+			if (!input.empty()) {
+				std::istringstream stream(input);
+				stream >> target;
+			}
+			std::cout  << std::endl;
+			std::cout << "\t Expecting Target Command:----- " << target << std::endl << std::endl << std::endl;
+		}
+
+		else {
+			target = 0;
+		}
+
+
+		
+
+
+
+		_getch();
+
+		HANDLE DCThread = (HANDLE)_beginthread(EmotivDataCollector, 0, NULL);
+		HANDLE SGThread = (HANDLE)_beginthread(StimulusGenerator, 0, NULL);
+
+		WaitForSingleObject(DCThread, INFINITE);
+		WaitForSingleObject(SGThread, INFINITE);
+
+		//getchar(); // or std::cin.get();
+
+		running = false;
+
+		Sleep(100);
+		std::cout << "Sending data to MATLAB..." << std::endl;
+		//File copying code
+		LPCWSTR dest = L"C:/Users/Tharinda/Documents/MATLAB/eeglab14_1_1b/eeg-common/cpp-to-mat/templog.csv";
+		LPCWSTR src = L"C:/Users/Tharinda/Documents/Visual Studio 2013/Projects/EmotivStim/Debug/preprocessed-log.csv";
+		CopyFile(src, dest, TRUE);
+		std::cout << "Waiting for response from MATLAB" << std::endl;
+		//getchar();
+
+		LPCWSTR lookupFile = L"C:\\Users\\Tharinda\\Documents\\MATLAB\\eeglab14_1_1b\\eeg-common\\mat-to-cpp\\epochs-4-ar.avg";
+		while (true)
+		{
+			GetFileAttributes(lookupFile); // from winbase.h
+			if (INVALID_FILE_ATTRIBUTES == GetFileAttributes(lookupFile) && GetLastError() == ERROR_FILE_NOT_FOUND)
+			{
+				Sleep(100);
+			}
+			else{
+				std::cout << "Got response from MATLAB" << std::endl;
+				Sleep(1000);
+				break;
+			}
+		}
+
+		int result = 0;
+		result = P300Classifier_AdaptWeightGauss(experiment, mode, target, history);
+		//P300Classifier_Integrate();
+
+		if (mode == 'A' || mode == 'B'){
+			std::cout << std::endl << "\t Target Command:----- " << target << std::endl;
+			std::cout << "\t Result Command:----- " << result << std::endl << std::endl;
+			if (target == result){
+				std::cout << "\t +++ CORRECT CLASSIFICATION! +++" << std::endl;
+				correct++;
+				history[experiment][0] = 1;
+			}
+			else{
+				std::cout << "\t  XXX WRONG CLASSIFICATION! XXX" << std::endl << std::endl;
+				wrong++;	
+				history[experiment][0] = 0;
+			}
+			std::cout << std::endl << "\t Correct:------- " << correct << std::endl;
+			std::cout << "\t Wrong:--------- " << wrong << std::endl;
+			std::cout << "\t Accuracy:------ " << ((float)correct / (float)(correct + wrong)) * 100.0 << "%" << std::endl;
+
+			history[experiment][1] = target;
+			history[experiment][2] = result;
+
+			
+		}
+
+
+		
+		experiment++;
+
+		std::cout << std::endl << "Press SPACE to continue, press X to stop experiments" << std::endl;
+		key = _getch();
+		if (key == 'X' || key == 'x'){
 			break;
 		}
+		running = true;
 	}
-
-	P300Classifier_PeakDiff();
 
 	std::cout << "*****************************************************************" << std::endl;
 	std::cout << "Press any key to exit..." << std::endl;
