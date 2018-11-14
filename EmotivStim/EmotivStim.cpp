@@ -25,6 +25,7 @@
 #include "edkErrorCode.h"
 #include "SerialPort.h"
 #include "enceph.h"
+#include "SendKeys.h"
 
 #define DATA_LENGTH 1
 
@@ -40,15 +41,17 @@
 //#define WINDOW_OFFSET 140
 //#define WINDOW_SIZE 38
 
-int TRIALS_PER_SERIES = 200;
+int TRIALS_PER_SERIES = 100;
 int RANDOM_NUMS = 4;
-int INTERFLASH_INTERVAL = 300;
+int INTERFLASH_INTERVAL = 500;
 
 //Classifier Parameters - Peak Comparison
 int WINDOW_OFFSET = 140;
 int WINDOW_SIZE = 38;
 
-char* portName = "\\\\.\\COM6";
+char* portName = "\\\\.\\COM6";  //Port of Arduino Mega - stimulus generator
+char* controllerPort = "\\\\.\\COM15"; //Port of  Arduino Uno - appliance controller
+
 char incomingData[DATA_LENGTH];
 
 char t[] = "1";
@@ -56,11 +59,14 @@ char nt[] = "2";
 int loopCount = 0;
 int trialCount = 0;
 int seriesCount = 0;
+
 SerialPort *arduino;
+SerialPort *controller;
 
 int randomNum = 0;
 
 bool running = true; /* flag used to stop the program execution */
+bool aborted = true; //flag used to detect if the trial was aborted
 void StimulusGenerator(void *unused); /* Threaded function to generate stimulii and send them to Arduino MCU */
 void EmotivDataCollector(void *unused); /* Threaded function to capture EEG and save in file */
 int marker = 0; /* marker value coming from Stimulus Generator thread */
@@ -80,6 +86,20 @@ bool copyFile(const char *SRC, const char* DEST) //Copies file from program fold
 	std::ofstream dest(DEST, std::ios::binary);
 	dest << src.rdbuf();
 	return src && dest;
+}
+
+void ApplianceController(SerialPort *port, int command){
+	char sendbuffer[] = " ";
+	
+	strcpy(sendbuffer, std::to_string(command).c_str());
+
+	int readResult = port->readSerialPort(incomingData, DATA_LENGTH);
+	readResult = port->readSerialPort(incomingData, DATA_LENGTH); //Clear incoming buffer
+	readResult = port->readSerialPort(incomingData, DATA_LENGTH);
+
+	port->writeSerialPort(sendbuffer, 2);  //Send command to arduino
+	std::cout << "Command # " << command << " sent to controller" << std::endl << std::endl;
+	
 }
 
 void StimulusGenerator(void *unused)
@@ -108,12 +128,13 @@ void StimulusGenerator(void *unused)
 		if (trialCount % TRIALS_PER_SERIES == 0){ // Inter-Trial code *******************************************
 
 			if (seriesCount == 1){
+				aborted = false;
 				running = false;
 				break;
 			}
 
 			seriesCount++;
-			std::cout << std::endl << std::endl << "Beginning Trial Series: " << seriesCount << std::endl << std::endl;
+			std::cout << std::endl << std::endl << "\t\t\t\t\t\tBeginning Trial Series: " << seriesCount << std::endl << std::endl;
 			arduino->writeSerialPort("c\0", DATA_LENGTH);
 			arduino->readBlockingSerialPort(incomingData, DATA_LENGTH);
 			Sleep(3000); //inter-series delay
@@ -305,6 +326,12 @@ void EmotivDataCollector(void *unused) {
 	std::cout << "Exiting from Emotiv connector..." << std::endl;
 	std::cout << std::endl << std::endl << "Data collection ended" << std::endl;
 	std::cout << "Press any key to continue" << std::endl;
+	if (!aborted){
+		// ENTER key down ******************************************************SIMULATED KEYPRESS
+		keybd_event(VK_RETURN, 0x9C, 0, 0);
+		// ENTER key up
+		keybd_event(VK_RETURN, 0x9C, 0, 0);
+	}
 }
 
 void P300Classifier_Integrate() {
@@ -646,12 +673,12 @@ void P300Classifier_WeightGauss(){
 }
 
 template<size_t R, size_t C>
-int P300Classifier_AdaptWeightGauss(int experiment, char mode, int target, double (&history)[R][C]){
+int P300Classifier_AdaptWeightGauss(double center, double radius,int experiment, char mode, int target, double (&history)[R][C]){
 	std::cout << "Model based - Adaptive Hybrid Classifier With Gaussian Filtering and Weighted Channel Ensembling" << std::endl;
 
 	int TARGETS = 4; //hardcoded
 
-	static double SEARCH_START = 110.0, SEARCH_END = 490.0, SEARCH_RADIUS = 10.0, SEARCH_CENTER = 250.0; // start from around 300
+	double SEARCH_START, SEARCH_END, SEARCH_RADIUS = radius, SEARCH_CENTER = center; // start from around 300
 	SEARCH_START = SEARCH_CENTER - SEARCH_RADIUS;
 	SEARCH_END = SEARCH_CENTER + SEARCH_RADIUS;
 	std::cout << "\t > Search Start > " << SEARCH_START << "\t < Search End > " << SEARCH_END << std::endl;
@@ -866,22 +893,39 @@ int main(int argc, char *argv[]) {
 	int correct = 0;
 	int wrong = 0;
 
+	double search_center = 250.0; //parameters for the classifier
+	double search_radius = 10.0;
+
 	double history[total_experiments][10]; //Experiment history = {correct/wrong - 1/0 , target , result , confidence , peakPos}
-	
+
 	std::cout << "EmotivStim v1.0 2018 - Emotiv EPOC EEG Data Logger for Light Flash Based P300 Experiments" << std::endl;
 	std::cout << "This software has used external libraries such as edk.lib" << std::endl;
 	std::cout << "*****************************************************************" << std::endl;
 	std::cout << "Make sure to connect the EPOC headset and to connect the Arduino" << std::endl << std::endl;
 
+	controller = new SerialPort(controllerPort);
+
+	if (controller->isConnected()){
+		std::cout << "Connected to controller at port " << controllerPort << std::endl << std::endl;
+	}
+
+
 	while (testing && experiment < total_experiments){
 		std::cout << std::endl << std::endl;
 
-		std::cout << "~~----------------------HISTORY----------------------~~" << std::endl;
-		std::cout << "{#\tC/W \ttarget \tresult \tconfidence \tpeakPos}" << std::endl;
+		std::cout << "~~~~~~----------------------~~HISTORY~~-----------------------~~~~~~" << std::endl;
+		std::cout << "#\tC/W/A \tTarget \tResult \tConf \tPeak \tFlash \tISI \tTime" << std::endl;
+		
+		
 		for (int i = 1; i < experiment; i++){
+			std::fixed;
 			std::cout << "#" << i << "\t" << history[i][0] << "\t" << history[i][1] << "\t" << history[i][2]
-				<< "\t" << history[i][3] << "%\t" << history[i][4] << "\t" << std::endl;
+				<< "\t" << std::setprecision(4) << history[i][3] << "%\t" << std::setprecision(5) << history[i][4] << "\t" << history[i][5] << "\t"
+				<< history[i][6] << "\t" << history[i][7] << "\t"
+				<< std::endl;
 		}
+
+		std::cout << std::endl << std::endl;
 
 		std::cout << "******************************************************************" << std::endl;
 		std::cout << "                          EXPERIMENT #" << experiment << std::endl;
@@ -892,7 +936,9 @@ int main(int argc, char *argv[]) {
 		std::cout << "\tRunning Mode:--------------------- " << mode << std::endl;
 		std::cout << "\tTrials Per Series:---------------- " << TRIALS_PER_SERIES << std::endl;
 		std::cout << "\tRandom Numbers:------------------- " << RANDOM_NUMS << std::endl;
-		std::cout << "\tISI:------------------------------ " << INTERFLASH_INTERVAL << "ms" << std::endl << std::endl;
+		std::cout << "\tISI:------------------------------ " << INTERFLASH_INTERVAL << "ms" <<  std::endl;
+		std::cout << "\tPeak Search Center:--------------- " << search_center << std::endl;
+		std::cout << "\tPeak Search Radius:--------------- " << search_radius << std::endl << std::endl;
 		/*std::cout << "\tWindow Offset (From -1000ms):----- " << WINDOW_OFFSET << " frames" << std::endl;
 		std::cout << "\tWindow Size:---------------------- " << WINDOW_SIZE << " frames" << std::endl << std::endl;*/
 
@@ -927,38 +973,30 @@ int main(int argc, char *argv[]) {
 			}
 			std::cout << std::endl;
 
-			/*std::cout << "\tRandom Numbers:------------------- ";
+			std::cout << "\tPeak Search Radius:--------------- ";
 			std::getline(std::cin, input);
 			if (!input.empty()) {
 				std::istringstream stream(input);
-				stream >> RANDOM_NUMS;
+				stream >> search_center;
 			}
 			std::cout << std::endl;
 
-			std::cout << "\tWindow Offset (From -1000ms):----- ";
+			std::cout << "\tPeak Search Raius:---------------- ";
 			std::getline(std::cin, input);
 			if (!input.empty()) {
 				std::istringstream stream(input);
-				stream >> WINDOW_OFFSET;
+				stream >> search_radius;
 			}
 			std::cout << std::endl;
-
-			std::cout << "\tWindow Size:---------------------- ";
-			std::getline(std::cin, input);
-			if (!input.empty()) {
-				std::istringstream stream(input);
-				stream >> WINDOW_SIZE;
-			}
-			std::cout << std::endl << std::endl;*/
 
 			std::cout << "Updated experiment parameters are as follows..." << std::endl << std::endl;
 
 			std::cout << "\tRunning Mode:--------------------- " << mode << std::endl;
 			std::cout << "\tTrials Per Series:---------------- " << TRIALS_PER_SERIES << std::endl;
 			std::cout << "\tRandom Numbers:------------------- " << RANDOM_NUMS << std::endl;
-			std::cout << "\tISI:------------------------------ " << INTERFLASH_INTERVAL << "ms" << std::endl << std::endl << std::endl;
-			/*std::cout << "\tWindow Offset (From -1000ms):----- " << WINDOW_OFFSET << " frames" << std::endl;
-			std::cout << "\tWindow Size:---------------------- " << WINDOW_SIZE << " frames" << std::endl << std::endl;*/
+			std::cout << "\tISI:------------------------------ " << INTERFLASH_INTERVAL << "ms" << std::endl;
+			std::cout << "\tPeak Search Center:--------------- " << search_center << std::endl;
+			std::cout << "\tPeak Search Radius:--------------- " << search_radius << std::endl << std::endl;
 		}
 
 
@@ -980,71 +1018,88 @@ int main(int argc, char *argv[]) {
 		}
 
 
-		
+		int result = 0; // int to store result
 
-
+		std::cout << "Press any key to start trial. Press again to abort" << std::endl;
 
 		_getch();
 
 		HANDLE DCThread = (HANDLE)_beginthread(EmotivDataCollector, 0, NULL);
 		HANDLE SGThread = (HANDLE)_beginthread(StimulusGenerator, 0, NULL);
 
+		getchar(); // or std::cin.get(); - THIS ABORTS THE TRIAL!
+		running = false;
+
 		WaitForSingleObject(DCThread, INFINITE);
 		WaitForSingleObject(SGThread, INFINITE);
 
-		//getchar(); // or std::cin.get();
+		if (aborted){ //if the trial was aborted
 
-		running = false;
+			history[experiment][0] = 0; history[experiment][1] = 0; history[experiment][2] = 0; history[experiment][3] = 0;
+			history[experiment][4] = 0; history[experiment][5] = 0; history[experiment][6] = 0; history[experiment][7] = 0;
 
-		Sleep(100);
-		std::cout << "Sending data to MATLAB..." << std::endl;
-		//File copying code
-		LPCWSTR dest = L"C:/Users/Tharinda/Documents/MATLAB/eeglab14_1_1b/eeg-common/cpp-to-mat/templog.csv";
-		LPCWSTR src = L"C:/Users/Tharinda/Documents/Visual Studio 2013/Projects/EmotivStim/Debug/preprocessed-log.csv";
-		CopyFile(src, dest, TRUE);
-		std::cout << "Waiting for response from MATLAB" << std::endl;
-		//getchar();
-
-		LPCWSTR lookupFile = L"C:\\Users\\Tharinda\\Documents\\MATLAB\\eeglab14_1_1b\\eeg-common\\mat-to-cpp\\epochs-4-ar.avg";
-		while (true)
-		{
-			GetFileAttributes(lookupFile); // from winbase.h
-			if (INVALID_FILE_ATTRIBUTES == GetFileAttributes(lookupFile) && GetLastError() == ERROR_FILE_NOT_FOUND)
-			{
-				Sleep(100);
-			}
-			else{
-				std::cout << "Got response from MATLAB" << std::endl;
-				Sleep(1000);
-				break;
-			}
 		}
 
-		int result = 0;
-		result = P300Classifier_AdaptWeightGauss(experiment, mode, target, history);
-		//P300Classifier_Integrate();
+		else{ // if the trial completed normally
 
-		if (mode == 'A' || mode == 'B'){
-			std::cout << std::endl << "\t Target Command:----- " << target << std::endl;
-			std::cout << "\t Result Command:----- " << result << std::endl << std::endl;
-			if (target == result){
-				std::cout << "\t +++ CORRECT CLASSIFICATION! +++" << std::endl;
-				correct++;
-				history[experiment][0] = 1;
-			}
-			else{
-				std::cout << "\t  XXX WRONG CLASSIFICATION! XXX" << std::endl << std::endl;
-				wrong++;	
-				history[experiment][0] = 0;
-			}
-			std::cout << std::endl << "\t Correct:------- " << correct << std::endl;
-			std::cout << "\t Wrong:--------- " << wrong << std::endl;
-			std::cout << "\t Accuracy:------ " << ((float)correct / (float)(correct + wrong)) * 100.0 << "%" << std::endl;
+			history[experiment][5] = TRIALS_PER_SERIES;
+			history[experiment][6] = INTERFLASH_INTERVAL;
+			history[experiment][7] = TRIALS_PER_SERIES*INTERFLASH_INTERVAL/1000;
 
-			history[experiment][1] = target;
-			history[experiment][2] = result;
+			Sleep(100);
+			std::cout << "Sending data to MATLAB..." << std::endl;
+			//File copying code >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+			LPCWSTR dest = L"C:/Users/Tharinda/Documents/MATLAB/eeglab14_1_1b/eeg-common/cpp-to-mat/templog.csv";
+			LPCWSTR src = L"C:/Users/Tharinda/Documents/Visual Studio 2013/Projects/EmotivStim/Debug/preprocessed-log.csv";
+			CopyFile(src, dest, TRUE);
+			std::cout << "Waiting for response from MATLAB" << std::endl;
+			//getchar(); >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+
+			LPCWSTR lookupFile = L"C:\\Users\\Tharinda\\Documents\\MATLAB\\eeglab14_1_1b\\eeg-common\\mat-to-cpp\\epochs-4-ar.avg";
+			while (true)
+			{
+				GetFileAttributes(lookupFile); // from winbase.h
+				if (INVALID_FILE_ATTRIBUTES == GetFileAttributes(lookupFile) && GetLastError() == ERROR_FILE_NOT_FOUND)
+				{
+					Sleep(100);
+				}
+				else{
+					std::cout << "Got response from MATLAB" << std::endl;
+					Sleep(1000);
+					break;
+				}
+			}
 
 			
+			result = P300Classifier_AdaptWeightGauss(search_center,search_radius, experiment, mode, target, history);
+			//P300Classifier_Integrate();
+
+			if (mode == 'B' | mode == 'C'){
+				ApplianceController(controller, result);
+			}
+
+
+			if (mode == 'A' || mode == 'B'){
+				std::cout << std::endl << "\t Target Command:----- " << target << std::endl;
+				std::cout << "\t Result Command:----- " << result << std::endl << std::endl;
+				if (target == result){
+					std::cout << "\t +++ CORRECT CLASSIFICATION! +++" << std::endl;
+					correct++;
+					history[experiment][0] = 1;
+				}
+				else{
+					std::cout << "\t  XXX WRONG CLASSIFICATION! XXX" << std::endl << std::endl;
+					wrong++;
+					history[experiment][0] = -1;
+				}
+				std::cout << std::endl << "\t Correct:------- " << correct << std::endl;
+				std::cout << "\t Wrong:--------- " << wrong << std::endl;
+				std::cout << "\t Accuracy:------ " << ((float)correct / (float)(correct + wrong)) * 100.0 << "%" << std::endl;
+
+				history[experiment][1] = target;
+				history[experiment][2] = result;
+
+			}
 		}
 
 
@@ -1056,6 +1111,8 @@ int main(int argc, char *argv[]) {
 		if (key == 'X' || key == 'x'){
 			break;
 		}
+
+		aborted = true;
 		running = true;
 	}
 
