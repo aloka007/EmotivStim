@@ -26,6 +26,7 @@
 #include "SerialPort.h"
 #include "enceph.h"
 #include "SendKeys.h"
+#include "Sequence.h"
 
 #define DATA_LENGTH 1
 
@@ -62,11 +63,14 @@ int seriesCount = 0;
 
 SerialPort *arduino;
 SerialPort *controller;
+//Sequence *sequence;
 
 int randomNum = 0;
 
 bool running = true; /* flag used to stop the program execution */
 bool aborted = true; //flag used to detect if the trial was aborted
+bool standby = true; //flag used to wait for a trial start
+
 void StimulusGenerator(void *unused); /* Threaded function to generate stimulii and send them to Arduino MCU */
 void EmotivDataCollector(void *unused); /* Threaded function to capture EEG and save in file */
 int marker = 0; /* marker value coming from Stimulus Generator thread */
@@ -144,7 +148,8 @@ void StimulusGenerator(void *unused)
 		}
 
 		randomNum =  (rand() % RANDOM_NUMS) + 1;  //random number
-		trialCount++;
+		//randomNum = (int) sequence->get(trialCount);                 // GET RECORDED RANDOM NUM
+		
 
 		strcpy(sendbuf, std::to_string(randomNum).c_str());
 		begin = clock();
@@ -169,6 +174,7 @@ void StimulusGenerator(void *unused)
 
 		incomingData[0] = '\0';
 
+		trialCount++;
 		loopCount++;
 		Sleep(INTERFLASH_INTERVAL);
 	}
@@ -332,6 +338,118 @@ void EmotivDataCollector(void *unused) {
 		// ENTER key up
 		keybd_event(VK_RETURN, 0x9C, 0, 0);
 	}
+}
+
+void BlinkTrigger(){
+	try {
+		EE_DataChannel_t targetChannelList[] = {
+			ED_COUNTER,
+			ED_AF3, ED_F7, ED_F3, ED_FC5, ED_T7,
+			ED_P7, ED_O1, ED_O2, ED_P8, ED_T8,
+			ED_FC6, ED_F4, ED_F8, ED_AF4, ED_GYROX, ED_GYROY, ED_TIMESTAMP,
+			ED_FUNC_ID, ED_FUNC_VALUE, ED_MARKER, ED_SYNC_SIGNAL
+		};
+
+		const char header[] = "COUNTER,AF3,F7,F3,FC5,T7,P7,O1,O2,P8"
+			",T8,FC6,F4,F8,AF4,GYROX,GYROY,TIMESTAMP,"
+			"FUNC_ID,FUNC_VALUE,MARKER,SYNC_SIGNAL,STIM,";
+
+		EmoEngineEventHandle eEvent = EE_EmoEngineEventCreate();
+		EmoStateHandle eState = EE_EmoStateCreate();
+		unsigned int userID = 0;
+		const unsigned short composerPort = 1726;
+		float secs = 1;
+		unsigned int datarate = 0;
+		bool collectEEG = false;
+		int option = 0;
+		int state = 0;
+
+		if (EE_EngineConnect() != EDK_OK) {
+			std::cout << "Emotiv Engine start up failed." << std::endl;
+			running = false;
+		}
+		else {
+			DataHandle hData = EE_DataCreate();
+			EE_DataSetBufferSizeInSec(secs);
+
+			std::cout << "EEG buffer size in secs:" << secs << std::endl;
+			int samplecount = 0;
+			double sampleTotal = 0;
+			int smoothing = 5;
+			while (standby) {
+
+				
+				state = EE_EngineGetNextEvent(eEvent);
+
+				if (state == EDK_OK) {
+					EE_Event_t eventType = EE_EmoEngineEventGetType(eEvent);
+					EE_EmoEngineEventGetUserId(eEvent, &userID);
+
+					// Log the EmoState if it has been updated
+					if (eventType == EE_UserAdded) {
+						//std::cout << "User added";
+						EE_DataAcquisitionEnable(userID, true);
+						collectEEG = true;
+					}
+
+				}
+
+				if (collectEEG) {
+					EE_DataUpdateHandle(0, hData);
+
+					unsigned int nSamplesTaken = 0;
+					EE_DataGetNumberOfSample(hData, &nSamplesTaken);
+
+					if (nSamplesTaken != 0) {
+
+						double* data = new double[nSamplesTaken];
+						double plotval = 0;
+						for (int sampleIdx = 0; sampleIdx<(int)nSamplesTaken; ++sampleIdx) {
+							for (int i = 0; i<sizeof(targetChannelList) / sizeof(EE_DataChannel_t); i++) {
+								int channel = targetChannelList[i];
+								EE_DataGet(hData, targetChannelList[i], data, nSamplesTaken);
+
+								char graph[120] = "                                                                                                                ";
+
+								if ( channel == ED_P7){
+									plotval = data[sampleIdx];
+									sampleTotal += plotval / smoothing;
+
+									if (samplecount % smoothing == 0){
+										int lineindex = 25 + ((int)sampleTotal - 4000) / 5;
+										if (lineindex > 0 && lineindex < 100){
+											graph[lineindex] = 'X';
+										}
+										
+										std::cout << ">" << graph << ">" << sampleTotal << std::endl;
+										sampleTotal = 0;
+									}
+									
+								}
+							}
+							samplecount++;
+						}
+						delete[] data;
+					}
+				}
+				
+				Sleep(1);
+			}
+			EE_DataFree(hData);
+		}
+
+		EE_EngineDisconnect();
+		EE_EmoStateFree(eState);
+		EE_EmoEngineEventFree(eEvent);
+	}
+	catch (...) {
+		std::cout << "Exception occured in the EEG logger!" << std::endl;
+		running = false;
+	}
+	std::cout << "Exiting from Emotiv connector..." << std::endl;
+	std::cout << std::endl << std::endl << "Data collection ended" << std::endl;
+	std::cout << "Press any key to continue" << std::endl;
+
 }
 
 void P300Classifier_Integrate() {
@@ -884,7 +1002,7 @@ int P300Classifier_AdaptWeightGauss(double center, double radius,int experiment,
 
 int main(int argc, char *argv[]) {
 	//int _tmain(int argc, _TCHAR* argv[]) {
-	const int total_experiments = 100;
+	const int total_experiments = 100;             //increase this!
 	int experiment = 1;
 	bool testing = true;
 	char mode = 'B';
@@ -898,7 +1016,7 @@ int main(int argc, char *argv[]) {
 
 	double history[total_experiments][10]; //Experiment history = {correct/wrong - 1/0 , target , result , confidence , peakPos}
 
-	std::cout << "EmotivStim v1.0 2018 - Emotiv EPOC EEG Data Logger for Light Flash Based P300 Experiments" << std::endl;
+	std::cout << "EncephLink v3.0 2018 - Emotiv EPOC EEG Data Logger | Stimulus generator | Appliance controller" << std::endl;
 	std::cout << "This software has used external libraries such as edk.lib" << std::endl;
 	std::cout << "*****************************************************************" << std::endl;
 	std::cout << "Make sure to connect the EPOC headset and to connect the Arduino" << std::endl << std::endl;
@@ -909,6 +1027,7 @@ int main(int argc, char *argv[]) {
 		std::cout << "Connected to controller at port " << controllerPort << std::endl << std::endl;
 	}
 
+	//sequence = new Sequence(TRIALS_PER_SERIES, RANDOM_NUMS, 1); // Sequence generator
 
 	while (testing && experiment < total_experiments){
 		std::cout << std::endl << std::endl;
@@ -957,11 +1076,12 @@ int main(int argc, char *argv[]) {
 			}
 			std::cout << std::endl;
 
-			std::cout << "\tTrials Per Series:---------------- ";
+			std::cout << "\tTrials Per Series (x of 4):------- ";
 			std::getline(std::cin, input);
 			if (!input.empty()) {
 				std::istringstream stream(input);
 				stream >> TRIALS_PER_SERIES;
+				//sequence->generate(TRIALS_PER_SERIES, RANDOM_NUMS, 1); // generate a new sequence on change
 			}
 			std::cout << std::endl;
 
@@ -973,7 +1093,7 @@ int main(int argc, char *argv[]) {
 			}
 			std::cout << std::endl;
 
-			std::cout << "\tPeak Search Radius:--------------- ";
+			std::cout << "\tPeak Search Center:--------------- ";
 			std::getline(std::cin, input);
 			if (!input.empty()) {
 				std::istringstream stream(input);
@@ -981,7 +1101,7 @@ int main(int argc, char *argv[]) {
 			}
 			std::cout << std::endl;
 
-			std::cout << "\tPeak Search Raius:---------------- ";
+			std::cout << "\tPeak Search Radius:---------------- ";
 			std::getline(std::cin, input);
 			if (!input.empty()) {
 				std::istringstream stream(input);
@@ -1021,6 +1141,8 @@ int main(int argc, char *argv[]) {
 		int result = 0; // int to store result
 
 		std::cout << "Press any key to start trial. Press again to abort" << std::endl;
+
+		//BlinkTrigger(); // The blink to start function still in development
 
 		_getch();
 

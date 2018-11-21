@@ -13,10 +13,15 @@ class Sequence {
 	const int T_LIMIT = 40; // max possible shuffling
 
 public:
+
 	Sequence(const int seqLength, int numTargets, int noRepeat){
+		generate(seqLength, numTargets, noRepeat);
+	}
+
+	int generate(const int seqLength, int numTargets, int noRepeat){
 		if (seqLength > 1000 || seqLength % numTargets != 0 || numTargets > seqLength){
 			printf("\nERROR! Sequence: Wrong initializer values\n");
-			return;
+			return 0;
 		}
 		filled = ((seqLength / T_LIMIT) + 1)*T_LIMIT;
 		markers = numTargets;
@@ -76,7 +81,7 @@ public:
 		}
 
 
-		printf("\n------------------Sequence Generation Completed!----------------------\n");
+		printf("------------------Sequence Generation Completed!----------------------\n");
 
 		/*for (int i = 0; i < length; i++){
 			printf("%d\t%d\n", i + 1, seq[i]);
@@ -85,7 +90,7 @@ public:
 		printf("\n-------------------------------------------------------------\n");*/
 
 		memcpy(seqArray, seq, 1000); //Copy the temporarily generated seq array to permanent one
-
+		return 1;
 	}
 
 	int get(int i){
