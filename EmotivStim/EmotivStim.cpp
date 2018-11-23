@@ -63,7 +63,7 @@ int seriesCount = 0;
 
 SerialPort *arduino;
 SerialPort *controller;
-//Sequence *sequence;
+Sequence *sequence;
 
 int randomNum = 0;
 
@@ -147,8 +147,8 @@ void StimulusGenerator(void *unused)
 			Sleep(500);
 		}
 
-		randomNum =  (rand() % RANDOM_NUMS) + 1;  //random number
-		//randomNum = (int) sequence->get(trialCount);                 // GET RECORDED RANDOM NUM
+		//randomNum =  (rand() % RANDOM_NUMS) + 1;  //random number
+		randomNum = (int) sequence->get(trialCount);                 // GET RECORDED RANDOM NUM
 		
 
 		strcpy(sendbuf, std::to_string(randomNum).c_str());
@@ -1027,7 +1027,7 @@ int main(int argc, char *argv[]) {
 		std::cout << "Connected to controller at port " << controllerPort << std::endl << std::endl;
 	}
 
-	//sequence = new Sequence(TRIALS_PER_SERIES, RANDOM_NUMS, 1); // Sequence generator
+	sequence = new Sequence(TRIALS_PER_SERIES, RANDOM_NUMS, 1); // Sequence generator
 
 	while (testing && experiment < total_experiments){
 		std::cout << std::endl << std::endl;
@@ -1081,7 +1081,7 @@ int main(int argc, char *argv[]) {
 			if (!input.empty()) {
 				std::istringstream stream(input);
 				stream >> TRIALS_PER_SERIES;
-				//sequence->generate(TRIALS_PER_SERIES, RANDOM_NUMS, 1); // generate a new sequence on change
+				sequence->generate(TRIALS_PER_SERIES, RANDOM_NUMS, 1); // generate a new sequence on change
 			}
 			std::cout << std::endl;
 
